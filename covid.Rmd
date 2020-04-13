@@ -1,0 +1,397 @@
+---
+title: "COVID"
+author:
+- name: Kieran Healy
+  affiliation: Duke University
+  email: kjhealy@soc.duke.edu
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+crossrefYaml: "config/pandoc-crossref-settings.yaml"
+output:
+  html_document: radix::radix_article
+  pdf_document: 
+    md_extensions: +simple_tables+table_captions+yaml_metadata_block+smart
+    template: /Users/kjhealy/.pandoc/templates/rmd-latex.template
+    pandoc_args: [
+      "--bibliography", "/Users/kjhealy/Documents/bibs/socbib-pandoc.bib",
+      "--filter", "pandoc-crossref",
+      "--filter", "pandoc-citeproc",
+      "--csl", "/Users/kjhealy/.pandoc/csl/ajps.csl"
+      ]      
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries, echo = TRUE}
+library(tidyverse)
+library(lubridate)
+library(here)
+library(janitor)
+library(socviz)
+library(ggrepel)
+library(paletteer)
+## --------------------------------------------------------------------
+## Custom font and theme, omit if you don't have the myriad library
+## (https://github.com/kjhealy/myriad) and associated Adobe fonts.
+## --------------------------------------------------------------------
+library(showtext)
+showtext_auto()
+# library(myriad)
+# import_myriad_semi()
+# theme_set(theme_myriad_semi())
+### --------------------------------------------------------------------
+## cb-friendly palette
+col_pal <- c("#E69F00", "#0072B2", "#000000", "#56B4E9", 
+             "#009E73", "#F0E442", "#D55E00", "#CC79A7")
+```
+
+```{r functions}
+## Download today's excel file, saving it to data/ and reading it in
+get_ecdc_data <- function(url = "https://www.ecdc.europa.eu/sites/default/files/documents/",
+                          fname = "COVID-19-geographic-distribution-worldwide-", 
+                          date = lubridate::today(), 
+                          ext = "xlsx", 
+                          dest = "data") {
+  
+  target <-  paste0(url, fname, date, ".", ext)
+  message("target: ", target)
+  destination <- fs::path(here::here("data"), paste0(fname, date), ext = ext)
+  message("saving to: ", destination)
+  
+  tf <- tempfile(fileext = ext)
+  curl::curl_download(target, tf)
+  fs::file_copy(tf, destination)
+  
+  switch(ext, 
+  xls = janitor::clean_names(readxl::read_xls(tf)),
+  xlsx = janitor::clean_names(readxl::read_xlsx(tf))
+  )
+}                          
+## Get Daily COVID Tracking Project Data
+## form is https://covidtracking.com/api/us/daily.csv
+get_uscovid_data <- function(url = "https://covidtracking.com/api/",
+                          unit = c("states", "us"),
+                          fname = "-", 
+                          date = lubridate::today(), 
+                          ext = "csv", 
+                          dest = "data/us_covid") {
+  unit <- match.arg(unit)
+  target <-  paste0(url, unit, "/", "daily.", ext)
+  message("target: ", target)
+  destination <- fs::path(here::here("data/covid_us"), paste0(unit, "_daily_", date), ext = ext)
+  message("saving to: ", destination)
+  
+  tf <- tempfile(fileext = ext)
+  curl::curl_download(target, tf)
+  fs::file_copy(tf, destination)
+  
+  janitor::clean_names(read_csv(tf))
+}                          
+## A useful function from Edward Visel, which does a thing
+## with tibbles that in the past I've done variable-by-variable
+## using match(), like an animal. The hardest part was 
+## figuring out that this operation is called a coalescing join  
+## https://alistaire.rbind.io/blog/coalescing-joins/
+coalesce_join <- function(x, y, 
+                          by = NULL, suffix = c(".x", ".y"), 
+                          join = dplyr::full_join, ...) {
+    joined <- join(x, y, by = by, suffix = suffix, ...)
+    # names of desired output
+    cols <- union(names(x), names(y))
+    
+    to_coalesce <- names(joined)[!names(joined) %in% cols]
+    suffix_used <- suffix[ifelse(endsWith(to_coalesce, suffix[1]), 1, 2)]
+    # remove suffixes and deduplicate
+    to_coalesce <- unique(substr(
+        to_coalesce, 
+        1, 
+        nchar(to_coalesce) - nchar(suffix_used)
+    ))
+    
+    coalesced <- purrr::map_dfc(to_coalesce, ~dplyr::coalesce(
+        joined[[paste0(.x, suffix[1])]], 
+        joined[[paste0(.x, suffix[2])]]
+    ))
+    names(coalesced) <- to_coalesce
+    
+    dplyr::bind_cols(joined, coalesced)[cols]
+}
+```
+
+
+```{r iso-country-codes}
+## Country codes. The ECDC does not quite use standard codes for countries
+## These are the iso2 and iso3 codes, plus some convenient groupings for
+## possible use later
+iso3_cnames <- read_csv("https://github.com/kjhealy/covid/raw/master/data/countries_iso3.csv")
+iso2_to_iso3 <- read_csv("https://github.com/kjhealy/covid/raw/master/data/iso2_to_iso3.csv")
+cname_table <- left_join(iso3_cnames, iso2_to_iso3)
+cname_table
+eu <- c("AUT", "BEL", "BGR", "HRV", "CYP", "CZE", "DNK", "EST", "FIN", "FRA",
+        "DEU", "GRC", "HUN", "IRL", "ITA", "LVA", "LTU", "LUX", "MLT", "NLD",
+        "POL", "PRT", "ROU", "SVK", "SVN", "ESP", "SWE", "GBR")
+europe <- c("ALB", "AND", "AUT", "BLR", "BEL", "BIH", "BGR", "HRV", "CYP", "CZE",
+        "DNK", "EST", "FRO", "FIN", "FRA", "DEU", "GIB", "GRC", "HUN", "ISL",
+        "IRL", "ITA", "LVA", "LIE", "LTU", "LUX", "MKD", "MLT", "MDA", "MCO",
+        "NLD", "NOR", "POL", "PRT", "ROU", "RUS", "SMR", "SRB", "SVK", "SVN",
+        "ESP", "SWE", "CHE", "UKR", "GBR", "VAT", "RSB", "IMN", "MNE")
+north_america <- c("AIA", "ATG", "ABW", "BHS", "BRB", "BLZ", "BMU", "VGB", "CAN", "CYM",
+        "CRI", "CUB", "CUW", "DMA", "DOM", "SLV", "GRL", "GRD", "GLP", "GTM",
+        "HTI", "HND", "JAM", "MTQ", "MEX", "SPM", "MSR", "ANT", "KNA", "NIC",
+        "PAN", "PRI", "KNA", "LCA", "SPM", "VCT", "TTO", "TCA", "VIR", "USA",
+        "SXM")
+south_america <- c("ARG", "BOL", "BRA", "CHL", "COL", "ECU", "FLK", "GUF", "GUY", "PRY",
+                   "PER", "SUR", "URY", "VEN")
+africa <- c("DZA", "AGO", "SHN", "BEN", "BWA", "BFA", "BDI", "CMR", "CPV", "CAF",
+        "TCD", "COM", "COG", "DJI", "EGY", "GNQ", "ERI", "ETH", "GAB", "GMB",
+        "GHA", "GNB", "GIN", "CIV", "KEN", "LSO", "LBR", "LBY", "MDG", "MWI",
+        "MLI", "MRT", "MUS", "MYT", "MAR", "MOZ", "NAM", "NER", "NGA", "STP",
+        "REU", "RWA", "STP", "SEN", "SYC", "SLE", "SOM", "ZAF", "SHN", "SDN",
+        "SWZ", "TZA", "TGO", "TUN", "UGA", "COD", "ZMB", "TZA", "ZWE", "SSD",
+        "COD")
+asia <- c("AFG", "ARM", "AZE", "BHR", "BGD", "BTN", "BRN", "KHM", "CHN", "CXR",
+        "CCK", "IOT", "GEO", "HKG", "IND", "IDN", "IRN", "IRQ", "ISR", "JPN",
+        "JOR", "KAZ", "PRK", "KOR", "KWT", "KGZ", "LAO", "LBN", "MAC", "MYS",
+        "MDV", "MNG", "MMR", "NPL", "OMN", "PAK", "PHL", "QAT", "SAU", "SGP",
+        "LKA", "SYR", "TWN", "TJK", "THA", "TUR", "TKM", "ARE", "UZB", "VNM",
+        "YEM", "PSE")
+oceania <- c("ASM", "AUS", "NZL", "COK", "FJI", "PYF", "GUM", "KIR", "MNP", "MHL",
+        "FSM", "UMI", "NRU", "NCL", "NZL", "NIU", "NFK", "PLW", "PNG", "MNP",
+        "SLB", "TKL", "TON", "TUV", "VUT", "UMI", "WLF", "WSM", "TLS")
+```
+
+## European Centers for Disease Control Data
+
+```{r get-and-clean-data}
+## There's a typo in the file name. Note 'disbtribution' rather than 'distribution'
+## e.g. COVID-19-geographic-disbtribution-worldwide-2020-03-18.xls
+## I assume this'll get fixed or changed at some point. 
+## The good thing is that these data files are cumulative
+library(readxl)
+
+library(httr)
+library(tidyverse)
+
+#create the URL where the dataset is stored with automatic updates every day
+
+url <- paste("https://www.ecdc.europa.eu/sites/default/files/documents/COVID-19-geographic-disbtribution-worldwide-",format(Sys.time(), "%Y-%m-%d"), ".xlsx", sep = "")
+
+#download the dataset from the website to a local temporary file
+
+GET(url, authenticate(":", ":", type="ntlm"), write_disk(tf <- tempfile(fileext = ".xlsx")))
+
+#read the Dataset sheet into “R”
+
+covid_raw  <- read_excel(tf)
+
+
+# 
+# covid_raw <- get_ecdc_data(url = "https://www.ecdc.europa.eu/sites/default/files/documents/COVID-19-geographic-disbtribution-worldwide-2020-03-22.xlsx",
+#                            fname = "COVID-19-geographic-distribution-worldwide-",
+#                            ext = "xlsx")
+covid_raw
+# covid <- covid_raw %>%
+#   mutate(date = lubridate::ymd(date_rep),
+#          iso2 = geo_id)
+
+covid <- covid_raw %>%
+  mutate(iso2 = Geold)
+
+covid
+## merge in the iso country names
+covid <- left_join(covid, cname_table)
+covid
+## Looks like a missing data code
+## Also note that not everything in this dataset is a country
+covid %>% 
+  filter(cases == -9)
+## A few ECDC country codes are non-iso, notably the UK
+anti_join(covid, cname_table) %>%
+  select(geo_id, countries_and_territories, iso2, iso3, cname) %>%
+  distinct()
+## A small crosswalk file that we'll coalesce into the missing values
+## We need to specify the na explicity because the xwalk file has Namibia
+## as a country -- i.e. country code = string literal "NA"
+cname_xwalk <- read_csv("data/ecdc_to_iso2_xwalk.csv",
+                        na = "")
+cname_xwalk
+## How to do this manually
+# covid <- covid %>%
+#   left_join(cname_xwalk, by = "geo_id") %>% 
+#   mutate(iso3 = coalesce(iso3.x, iso3.y),
+#          cname = coalesce(cname.x, cname.y)) %>% 
+#   select(-iso3.x, -iso3.y, cname.x, cname.y)
+## But nicer to use the function from Edward Visel
+covid <- coalesce_join(covid, cname_xwalk, 
+                       by = "geo_id", join = dplyr::left_join)
+## Take a look again
+anti_join(covid, cname_table) %>%
+  select(geo_id, countries_and_territories, iso2, iso3, cname) %>%
+  distinct()
+```
+
+```{r plots}
+## cumulative cases for selected countries
+cu_out <- covid %>%
+  filter(iso3 %in% c("ITA", "CHN", "GBR", "FRA", 
+                     "USA", "KOR")) %>%
+  group_by(cname) %>%
+  arrange(date) %>%
+  mutate(cases_na = na_if(cases, 0), 
+         deaths_na = na_if(deaths,0),
+         cu_cases = cumsum(cases),
+         cu_deaths = cumsum(deaths)) %>%
+  select(date, cname, cu_cases, cu_deaths) %>%
+  pivot_longer(cu_cases:cu_deaths, 
+               names_to = "measure", values_to = "count") %>%
+  mutate(measure = recode(measure, `cu_cases` = "Cases", 
+                         `cu_deaths` = "Deaths")) %>%
+  mutate(count = na_if(count, 0))
+cu_out %>% 
+  arrange(desc(date))
+cu_out %>% 
+  ggplot(mapping = aes(x = date, y = count, 
+                       color = measure)) + 
+  geom_line(size = 1.5) + 
+  scale_color_manual(values = col_pal) + 
+#  scale_y_continuous(labels = scales::comma_format(accuracy = 1)) + 
+  scale_y_continuous(trans = "log2",
+                     labels = scales::comma_format(accuracy = 1),
+                     breaks = 2^c(seq(1, 17, 2))) +
+  # scale_y_continuous(trans = "log10",
+  #                    labels = scales::comma_format(accuracy = 1)) +
+  labs(title = paste0("COVID-19 Cumulative Recorded Cases and Deaths to ", 
+                      max(cu_out$date)), 
+       x = "Date", y = "Cumulative Reported Events (log 2 scale)", color = "Measure") +
+  facet_wrap(~ reorder(cname, -count, na.rm = TRUE)) + 
+  theme(legend.position = "top")
+## Just deaths
+cu_out %>% 
+  filter(measure == "Deaths") %>% 
+  ggplot(mapping = aes(x = date, y = count)) + 
+  geom_line(size = 1.5) + 
+#  scale_y_continuous(labels = scales::comma_format(accuracy = 1)) + 
+  scale_y_continuous(trans = "log2",
+                     labels = scales::comma_format(accuracy = 1),
+                     breaks = 2^c(seq(1, 17, 2))) +
+  # scale_y_continuous(trans = "log10",
+  #                    labels = scales::comma_format(accuracy = 1)) +
+  labs(title = paste0("COVID-19 Cumulative Recorded Deaths to ", 
+                      max(cu_out$date)), 
+       x = "Date", y = "Cumulative Reported Events (log 2 scale)") +
+  facet_wrap(~ reorder(cname, -count, na.rm = TRUE)) + 
+  theme(legend.position = "top")
+  
+```
+
+```{r}
+## The graph everyone draws, but let's use deaths not cases, given that testing is so 
+## laggy in so many places
+cov_curve <- covid %>%
+  select(date, cname, iso3, cases, deaths) %>%
+  drop_na(iso3) %>%
+  group_by(iso3) %>%
+  arrange(date) %>%
+  mutate(cu_cases = cumsum(cases), 
+         cu_deaths = cumsum(deaths)) %>%
+  filter(cu_deaths > 9) %>%
+  mutate(days_elapsed = date - min(date),
+         end_label = ifelse(date == max(date), cname, NA))
+cov_curve
+focus_cn <- c("CHN", "GBR", "USA", "IRN", "JPN",
+              "KOR", "ITA", "FRA", "ESP")
+cov_curve %>%
+  filter(iso3 %in% focus_cn) %>% ## focus on just a few countries, defined above
+  mutate(end_label = recode(end_label, `United States` = "USA",
+                        `Iran, Islamic Republic of` = "Iran", 
+                        `Korea, Republic of` = "South Korea", 
+                        `United Kingdom` = "UK")) %>%
+  ggplot(mapping = aes(x = days_elapsed, y = cu_deaths, 
+         color = cname, label = end_label, 
+         group = cname)) + 
+  geom_line(size = 0.8) + 
+  geom_text_repel(nudge_x = 1.1,
+                  nudge_y = 0.1, 
+                  segment.color = NA) + 
+  guides(color = FALSE) + 
+  scale_color_manual(values = prismatic::clr_darken(paletteer_d("ggsci::category20_d3"), 0.2)) +
+  scale_y_continuous(labels = scales::comma_format(accuracy = 1), 
+                     breaks = 2^seq(4, 12),
+                     trans = "log2") + 
+  labs(x = "Days Since 10th Confirmed Death", 
+       y = "Cumulative Number of Deaths (log scale)", 
+       title = "Cumulative Reported Deaths from COVID-19, Selected Countries", 
+       subtitle = paste("Data as of", format(max(cov_curve$date), "%A, %B %e, %Y")), 
+       caption = "Kieran Healy @kjhealy / Data: ECDC") + 
+    theme(plot.title = element_text(size = rel(2), face = "bold"),
+          plot.subtitle = element_text(size = rel(1.5)),
+          axis.text.y = element_text(size = rel(2)),
+          axis.title.x = element_text(size = rel(1.5)),
+          axis.title.y = element_text(size = rel(1.5)),
+          axis.text.x = element_text(size = rel(2)),
+          legend.text = element_text(size = rel(2))
+          )
+```
+
+```{r table}
+cov_curve %>%
+  group_by(iso3) %>%
+  filter(cu_deaths == max(cu_deaths)) %>%
+  arrange(desc(cu_deaths)) %>%
+  select(cname, cu_cases, cu_deaths, days_elapsed)
+```
+
+
+```{r us-only}
+cu_out %>% 
+  filter(cname == "United States", date > "2020-02-20") %>%
+  ggplot(mapping = aes(x = date, y = count, 
+                       color = measure)) + 
+  geom_line(size = 1.5) + 
+  scale_color_manual(values = col_pal) + 
+  scale_y_continuous(trans = "log2",
+                     labels = scales::comma_format(accuracy = 1),
+                     breaks = 2^c(seq(1, 17, 2))) +
+  labs(title = "COVID-19 Cumulative Recorded Cases and Deaths in the United States",
+       x = "Date", y = "Cumulative Reported Events (log 2 scale)", color = "Measure") +
+  theme(legend.position = "top")
+```
+
+## US State-Level Data from [https://covidtracking.com]
+
+```{r}
+us_states_raw <- get_uscovid_data()
+us_states <- us_states_raw %>%
+  mutate(date = lubridate::ymd(date)) %>%
+  pivot_longer(positive:death, names_to = "measure", values_to = "count")
+us_states %>%
+  group_by(state) %>%
+  filter(measure == "positive") %>%
+  summarize(total = sum(count)) %>%
+  arrange(desc(total)) %>%
+  top_n(10) %>%
+  ggplot(aes(x = total, y = reorder(state, total))) + 
+  geom_point(size = 3) + 
+  labs(title = "Total Recorded Cases to Date",
+       y = NULL, 
+       x = "Count") + 
+  theme(axis.text.y = element_text(size = rel(2)))
+us_states %>%
+  group_by(state) %>%
+  mutate(flag = state == "NY") %>%
+  arrange(date) %>%
+  filter(measure == "positive", date > "2020-03-09") %>%
+  mutate(cu_total = cumsum(count)) %>%
+  top_n(10) %>%
+  ggplot(aes(x = date, y = cu_total, group = state, color = flag)) + 
+  geom_line(size = 0.5) + 
+  scale_color_manual(values = c("gray50", "red")) + 
+  guides(color = FALSE) + 
+  labs(title = "Cumulative Cases to Date, by State",
+       y = "Cases", 
+       x = "Date") + 
+  annotate("text", x = lubridate::ymd("2020-03-19"), y = 10500, 
+           label = "NY", color = "red") + 
+  theme(axis.text.y = element_text(size = rel(2)))
+```

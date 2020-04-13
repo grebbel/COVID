@@ -1,0 +1,232 @@
+---
+title: "Covid-19."
+author: Robert ten Hove
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    code_folding: hide
+    css: corp-styles.css
+    df_print: paged
+    highlight: pygments
+    number_sections: yes
+    self_contained: yes
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+version: '2.1'
+---
+
+<img src="./source/Bub.png" style="position:absolute;top:0px;right:0px;" />
+<div class="watermark">Public data</div>
+
+
+
+```{r echo=TRUE, warning=FALSE, message=FALSE,  include=TRUE}
+
+rm(list = ls())  # remove all data from global environment.
+
+setwd("~/Documents/Workspace/Epidemio/COVID")  #Set working directory
+# Load libraries for importing text and plotting data
+library(tidyverse)
+ library(ggplot2)
+ library(plotly)
+ library(formattable)
+library(reshape2)
+# library(sparkline)
+# library(kableExtra)
+# library(heatmaply)
+# library(reshape)
+# library(matrixStats)
+library(covdata)
+library(ggrepel)
+library(paletteer)
+library(prismatic)
+```
+
+
+# Introduction 
+In this document I'm fiddling around with the public Corona-19 data repositories.  
+
+# Load data  
+The `covnat` library is a data package for R. It provides COVID-19 case data from three sources:  
+  
+    National level data from the European Centers for Disease Control.  
+    State-level data for the United States from the COVID Tracking Project.  
+    State-level and county-level data for the United States from the New York Times.  
+
+The data are provided as-is. More information about collection methods, scope, limits, and possible sources of error in the data can be found in the documentation provided by their respective sources and on [Kieran Healy's git](https://kjhealy.github.io/covdata/).  
+# Visualisations 
+
+## Number of cases 
+The Netherlands. For such a small country, Covid-19 doesn't seem to underperform. Are The Netherlands among the top Corona-countries because high amount of testing? Still, Dutch laboratories are remarkably reluctant on testing; even health-care staff are hardy tested.  
+
+```{r echo=TRUE, warning=FALSE, message=FALSE,  include=TRUE}
+## Convenince "Not in" operator
+"%nin%" <- function(x, y) {
+  return( !(x %in% y) )
+}
+
+
+## Countries to highlight
+focus_cn <- c("CHN", "DEU", "GBR", "USA", "ITA", "FRA", "ESP", "POL", "NLD", "KOR")
+
+## Colors
+cgroup_cols <- c(clr_darken(paletteer_d("ggsci::category20_d3"), 0.2)[1:length(focus_cn)], "gray70")
+
+covnat %>%
+  filter(cu_cases > 99) %>%
+  mutate(days_elapsed = date - min(date),
+        end_label = ifelse(date == max(date), cname, NA),
+        end_label = recode(end_label, `United States` = "USA",
+                            `Iran, Islamic Republic of` = "Iran",
+                            `Korea, Republic of` = "South Korea",
+                            `United Kingdom` = "UK"),
+         cname = recode(cname, `United States` = "USA",
+                        `Iran, Islamic Republic of` = "Iran",
+                        `Korea, Republic of` = "South Korea",
+                        `United Kingdom` = "UK"),
+         end_label = case_when(iso3 %in% focus_cn ~ end_label,
+                               TRUE ~ NA_character_),
+         cgroup = case_when(iso3 %in% focus_cn ~ iso3,
+                            TRUE ~ "ZZOTHER")) %>%
+  ggplot(mapping = aes(x = days_elapsed, y = cu_cases,
+         color = cgroup, label = end_label,
+         group = cname)) +
+  geom_line(size = 0.5) +
+  geom_text_repel(nudge_x = 0.75,
+                  segment.color = NA) +
+  guides(color = FALSE) +
+  scale_color_manual(values = cgroup_cols) +
+  scale_y_continuous(labels = scales::comma_format(accuracy = 1),
+                     breaks = 2^seq(4, 19, 1),
+                     trans = "log2") +
+  labs(x = "Days Since 100th Confirmed Case",
+       y = "Cumulative Number of Reported Cases (log2 scale)",
+       title = "Cumulative Reported Cases of COVID-19, Selected Countries",
+       subtitle = paste("ECDC data as of", format(max(covnat$date), "%A, %B %e, %Y")),
+       caption = "Data: https://www.ecdc.europa.eu/") +
+  theme_minimal()
+
+
+
+```
+
+## Number of persons past-on 
+
+In lines.  
+```{r echo=TRUE, warning=FALSE, message=FALSE,  include=TRUE}
+covnat %>%
+  filter(cu_deaths > 99) %>%
+  mutate(days_elapsed = date - min(date),
+        end_label = ifelse(date == max(date), cname, NA),
+        end_label = recode(end_label, `United States` = "USA",
+                            `Iran, Islamic Republic of` = "Iran",
+                            `Korea, Republic of` = "South Korea",
+                            `United Kingdom` = "UK"),
+         cname = recode(cname, `United States` = "USA",
+                        `Iran, Islamic Republic of` = "Iran",
+                        `Korea, Republic of` = "South Korea",
+                        `United Kingdom` = "UK"),
+         end_label = case_when(iso3 %in% focus_cn ~ end_label,
+                               TRUE ~ NA_character_),
+         cgroup = case_when(iso3 %in% focus_cn ~ iso3,
+                            TRUE ~ "ZZOTHER")) %>%
+  ggplot(mapping = aes(x = days_elapsed, y = cu_deaths,
+         color = cgroup, label = end_label,
+         group = cname)) +
+  geom_line(size = 0.5) +
+  geom_text_repel(nudge_x = 0.75,
+                  segment.color = NA) +
+  guides(color = FALSE) +
+  scale_color_manual(values = cgroup_cols) +
+  scale_y_continuous(labels = scales::comma_format(accuracy = 1),
+                     breaks = 2^seq(4, 19, 1),
+                     trans = "log2") +
+  labs(x = "Days Since 100th Confirmed Case",
+       y = "Cumulative Number of Reported Cases (log2 scale)",
+       title = "Cumulative Reported Deaths of COVID-19, Selected Countries",
+       subtitle = paste("ECDC data as of", format(max(covnat$date), "%A, %B %e, %Y")),
+       caption = "Data: https://www.ecdc.europa.eu/") +
+  theme_minimal()
+
+```
+
+And in bars. 
+
+```{r echo=TRUE, warning=FALSE, message=FALSE,  include=TRUE}
+focus_cn <- c("USA", "ITA", "ESP", "NLD")
+
+filter_countries <- function(x) {
+  w <- paste(focus_cn, collapse= "|") 
+  
+  #New column for name-groups
+  x$group <- NA
+  x <- mutate(x, group = 
+           ifelse(grepl(w, iso3), 9,
+                  NA)) 
+
+  x <- filter(x, group == 9)
+  
+}
+
+bar <- filter_countries(covnat)
+
+bar <- bar %>% 
+  filter(date > '2020-03-01')
+
+
+p <- ggplot(bar, aes(x=date,y=cu_deaths )) + geom_bar(stat="identity")
+
+p <- p + facet_grid(rows = vars(iso3))
+
+
+fig <- ggplotly(p)
+
+fig
+
+
+```
+
+
+
+<!-- ## GGE -->
+<!-- Is there a relation between number of 'confirmed cases' and number of deaths?   -->
+
+<!-- ```{r echo=TRUE, warning=FALSE, message=FALSE,  include=TRUE} -->
+<!-- mod <- covnat %>% -->
+<!--   filter(cu_deaths > 99) %>% -->
+<!--   select(iso3, pop_2018, cu_deaths) -->
+
+<!-- mod2 <- mod %>%  -->
+<!--   cut(mod2, breaks = 1000000) -->
+
+<!-- mod <- mod %>%  -->
+<!--   pivot_wider(names_from = iso3, values_from = cu_deaths) -->
+
+
+<!-- table(cut(y, breaks = pi/3*(-3:3))) -->
+
+
+<!-- ``` -->
+<!-- ctr18 <- controls18 %>%  -->
+<!--   select(name, loccode, yadjust_mean) -->
+
+<!-- ctr18 <- ctr18 %>%  -->
+<!--   pivot_wider(names_from = loccode, values_from = yadjust_mean) -->
+
+<!-- row.names(ctr18) <- ctr18$name -->
+
+<!-- ctr18$name <- NULL -->
+
+<!-- #Take a look inside -->
+<!-- apply(ctr18,2,summary) -->
+
+
+
+```{r echo=TRUE, warning=FALSE, message=FALSE,  include=TRUE}
+citation("covdata")
+```
+
